@@ -2,7 +2,7 @@
 CC = gcc
 
 # Flags
-CFLAGS = -std=gnu11 -Wall -Wextra
+CFLAGS = -std=gnu11 -Wall -Wextra -DVERBOSE=0 -O3 -march=native --fast-math
 LDFLAGS = -lm
 
 # Binary file
@@ -20,4 +20,3 @@ $(TARGET): $(C_OBJS)
 
 clean:
 	rm -f $(TARGET) *.o
-
