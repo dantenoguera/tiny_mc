@@ -90,23 +90,22 @@ static void photon(void)
     z = _mm256_xor_ps(z, z);
     u = _mm256_xor_ps(u, u);
     v = _mm256_xor_ps(v, v);
-    w = _mm256_xor_ps(w, w);
+
+    float _w = 1.0f;
+    w = _mm256_broadcast_ss(&_w);
     
     float weight = 1.0f;
 
     for (;;) {
         /* move */
-        float t = -logf(rand01()); 
+        float _t = -logf(rand01()); 
+        __m256 t = _mm256_broadcast_ss(&_t); // mal
 
-        // usar FMA, broadcast t?
-        x += t * u;
-        y += t * v;
-        z += t * w;
+        x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
+        y = _mm256_fmadd_ps(t, v, y);
+        z = _mm256_fmadd_ps(t, w, z);
 
-        // hay un dot product hay un sqrt, hacer un vector de shells
         unsigned int shell = sqrtf(x * x + y * y + z * z) * shells_per_mfp; /* absorb */
-
-        // 
         if (shell > SHELLS - 1) {
             shell = SHELLS - 1;
         }
