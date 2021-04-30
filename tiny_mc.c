@@ -1,10 +1,3 @@
-/* Tiny Monte Carlo by Scott Prahl (http://omlc.ogi.edu)"
- * 1 W Point Source Heating in Infinite Isotropic Scattering Medium
- * http://omlc.ogi.edu/software/mc/tiny_mc.c
- *
- * Adaptado para CP2014, Nicolas Wolovick
- */
-
 #include "params.h"
 #include "wtime.h"
 
@@ -12,6 +5,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <x86intrin.h>
 
 /***
  * xoshiro128+
@@ -84,24 +78,39 @@ static void photon(void)
     const float shells_per_mfp = 1e4 / MICRONS_PER_SHELL / (MU_A + MU_S);
 
     /* launch */
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
-    float u = 0.0f;
-    float v = 0.0f;
-    float w = 1.0f;
+    __m256 x;
+    __m256 y;
+    __m256 z;
+    __m256 u;
+    __m256 v;
+    __m256 w;
+
+    x = _mm256_xor_ps(x, x);
+    y = _mm256_xor_ps(y, z);
+    z = _mm256_xor_ps(z, z);
+    u = _mm256_xor_ps(u, u);
+    v = _mm256_xor_ps(v, v);
+    w = _mm256_xor_ps(w, w);
+    
     float weight = 1.0f;
 
     for (;;) {
-        float t = -logf(rand01()); /* move */
+        /* move */
+        float t = -logf(rand01()); 
+
+        // usar FMA, broadcast t?
         x += t * u;
         y += t * v;
         z += t * w;
 
+        // hay un dot product hay un sqrt, hacer un vector de shells
         unsigned int shell = sqrtf(x * x + y * y + z * z) * shells_per_mfp; /* absorb */
+
+        // 
         if (shell > SHELLS - 1) {
             shell = SHELLS - 1;
         }
+
         heat[shell] += (1.0f - albedo) * weight;
         heat2[shell] += (1.0f - albedo) * (1.0f - albedo) * weight * weight; /* add up squares */
         weight *= albedo;
@@ -136,7 +145,7 @@ int main(void)
     // start timer
     double start = wtime();
     // simulation
-    for (unsigned int i = 0; i < PHOTONS; ++i) {
+    for (unsigned int i = 0; i < PHOTONS; ++i) { // TODO: incrementar de a 8 o tenerlo en cuenta
         photon();
     }
     // stop timer

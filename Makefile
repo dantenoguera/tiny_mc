@@ -2,7 +2,7 @@
 CC = gcc
 
 # Flags
-CFLAGS = -std=gnu11 -Wall -Wextra -DVERBOSE=0 -O3 -march=native --fast-math
+CFLAGS = -std=gnu11 -Wall -Wextra -DVERBOSE=1 -O3 -march=native --fast-math
 LDFLAGS = -lm
 
 # Binary file
