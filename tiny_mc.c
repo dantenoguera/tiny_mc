@@ -8,6 +8,7 @@
 #include <x86intrin.h>
 
 /***
+ * ALan Test
  * xoshiro128+
  * https://prng.di.unimi.it/xoshiro128plus.c
  ***/
@@ -151,7 +152,6 @@ static void photon(void)
         
         float _one = 1.0f;
         __m256 one = _mm256_broadcast_ss(1.0f);
-        __m256 v = _mm256_set1_ps(1.0f);
 
         float _two = 2.0f;
         __m256 two = _mm256_broadcast_ss(&_two);
