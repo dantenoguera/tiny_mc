@@ -64,8 +64,8 @@ char t3[] = "CPU version, adapted for PEAGPGPU by Gustavo Castellano"
 
 
 // global state, heat and heat square in each shell
-static float heat[SHELLS];
-static float heat2[SHELLS];
+static __m256 heat[SHELLS];
+static __m256 heat2[SHELLS];
 
 
 /***
@@ -75,7 +75,7 @@ static float heat2[SHELLS];
 static void photon(void)
 {
     const float albedo = MU_S / (MU_S + MU_A);
-    const float shells_per_mfp = 1e4 / MICRONS_PER_SHELL / (MU_A + MU_S);
+    const float _shells_per_mfp = 1e4 / MICRONS_PER_SHELL / (MU_A + MU_S);
 
     /* launch */
     __m256 x;
@@ -104,32 +104,64 @@ static void photon(void)
         x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
         y = _mm256_fmadd_ps(t, v, y);
         z = _mm256_fmadd_ps(t, w, z);
+        
+        /* absorb */
+        __m256 x2 = _mm256_mul_ps(x, x);
+        __m256 y2 = _mm256_mul_ps(y, y);
+        __m256 z2 = _mm256_mul_ps(z, z);
 
-        unsigned int shell = sqrtf(x * x + y * y + z * z) * shells_per_mfp; /* absorb */
-        if (shell > SHELLS - 1) {
+        __m256 x2my2 = _mm256_add_ps(x2, y2);
+        __m256 tot = _mm256_add_ps(x2my2, z2);
+
+        __m256 rad = _mm256_sqrt_ps(tot);
+        __m256 shells_per_mfp = _mm256_broadcast_ss(&_shells_per_mfp);
+
+        __m256i shell = _mm256_cvttps_epu32(_mm256_mul_ps(rad, shells_per_mfp));
+        if (shell > SHELLS - 1) { // TODO
             shell = SHELLS - 1;
         }
+
+        // TODO
+        // shell = [ph1, ph2, ph3, ..., ph8]
+        //ph1 = 1
+        //ph2 = 1
+        // heat[1] += ...
+        // heat[1] += ...
+        // ...
+        // heat[]
 
         heat[shell] += (1.0f - albedo) * weight;
         heat2[shell] += (1.0f - albedo) * (1.0f - albedo) * weight * weight; /* add up squares */
         weight *= albedo;
 
-        /* New direction, rejection method */
-        float xi1, xi2;
-        do {
-            xi1 = 2.0f * rand01() - 1.0f;
-            xi2 = 2.0f * rand01() - 1.0f;
-            t = xi1 * xi1 + xi2 * xi2;
-        } while (1.0f < t); 
-        u = 2.0f * t - 1.0f;
-        v = xi1 * sqrtf((1.0f - u * u) / t);
-        w = xi2 * sqrtf((1.0f - u * u) / t);
-
-        if (weight < 0.001f) { /* roulette */
+        /* roulette */
+        if (weight < 0.001f) { // TODO
             if (rand01() > 0.1f)
                 break;
             weight /= 0.1f;
         }
+
+        /* New direction, rejection method */
+        float xi1, xi2; // TODO
+        do {
+            xi1 = 2.0f * rand01() - 1.0f;
+            xi2 = 2.0f * rand01() - 1.0f;
+            t = xi1 * xi1 + xi2 * xi2;
+        } while (1.0f < t);
+        
+        float _one = 1.0f;
+        __m256 one = _mm256_broadcast_ss(1.0f);
+        __m256 v = _mm256_set1_ps(1.0f);
+
+        float _two = 2.0f;
+        __m256 two = _mm256_broadcast_ss(&_two);
+
+        u = _mm256_fmsub_ps(two, t, one); // u = 2*t-1
+        
+        __m256 sqr = _mm256_sqrt_ps(_mm256_div_ps(_mm256_fnmadd_ps(u, u, one), t)); // sqrtf((1.0f - u * u)
+        
+        v = _mm256_mul_ps(xi1, sqr);
+        w = _mm256_mul_ps(xi2, sqr);
     }
 }
 
