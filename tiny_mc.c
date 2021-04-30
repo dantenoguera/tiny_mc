@@ -8,6 +8,7 @@
 #include <x86intrin.h>
 
 /***
+ * ALan Test
  * xoshiro128+
  * https://prng.di.unimi.it/xoshiro128plus.c
  ***/
