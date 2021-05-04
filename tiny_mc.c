@@ -8,7 +8,6 @@
 #include <x86intrin.h>
 
 /***
- * ALan Test
  * xoshiro128+
  * https://prng.di.unimi.it/xoshiro128plus.c
  ***/
@@ -65,9 +64,17 @@ char t3[] = "CPU version, adapted for PEAGPGPU by Gustavo Castellano"
 
 
 // global state, heat and heat square in each shell
-static __m256 heat[SHELLS];
-static __m256 heat2[SHELLS];
+static float heat[SHELLS];
+static float heat2[SHELLS];
 
+void load_heats(unsigned int* shell, float* ht, float* ht2)
+{
+    for (int i = 0; i < 8; i++)
+    {
+        heat[shell[i]] += ht[i];
+        heat2[shell[i]] += ht2[i];
+    }
+}
 
 /***
  * Photon
@@ -75,32 +82,25 @@ static __m256 heat2[SHELLS];
 
 static void photon(void)
 {
-    const float albedo = MU_S / (MU_S + MU_A);
-    const float _shells_per_mfp = 1e4 / MICRONS_PER_SHELL / (MU_A + MU_S);
+    const __m256 one = _mm256_set1_ps(1.0);
+    const __m256 two = _mm256_set1_ps(2.0);
+    const __m256 albedo = _mm256_set1_ps(MU_S / (MU_S + MU_A));
+    const __m256 shells_per_mfp = _mm256_set1_ps(1e4 / MICRONS_PER_SHELL / (MU_A + MU_S));
 
     /* launch */
-    __m256 x;
-    __m256 y;
-    __m256 z;
-    __m256 u;
-    __m256 v;
-    __m256 w;
+    __m256 x = _mm256_set1_ps(0.0);
+    __m256 y = _mm256_set1_ps(0.0);
+    __m256 z = _mm256_set1_ps(0.0);
+    __m256 u = _mm256_set1_ps(0.0);
+    __m256 v = _mm256_set1_ps(0.0);
+    __m256 w = _mm256_set1_ps(1.0);
 
-    x = _mm256_xor_ps(x, x);
-    y = _mm256_xor_ps(y, z);
-    z = _mm256_xor_ps(z, z);
-    u = _mm256_xor_ps(u, u);
-    v = _mm256_xor_ps(v, v);
+    __m256 weight = _mm256_set1_ps(1.0);
 
-    float _w = 1.0f;
-    w = _mm256_broadcast_ss(&_w);
-    
-    float weight = 1.0f;
-
-    for (;;) {
+    int i = 0;
+    while (i < PHOTONS) {
         /* move */
-        float _t = -logf(rand01()); 
-        __m256 t = _mm256_broadcast_ss(&_t); // mal
+        __m256 t = -logf(rand01()); // TODO
 
         x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
         y = _mm256_fmadd_ps(t, v, y);
@@ -113,14 +113,12 @@ static void photon(void)
 
         __m256 x2my2 = _mm256_add_ps(x2, y2);
         __m256 tot = _mm256_add_ps(x2my2, z2);
-
         __m256 rad = _mm256_sqrt_ps(tot);
-        __m256 shells_per_mfp = _mm256_broadcast_ss(&_shells_per_mfp);
 
         __m256i shell = _mm256_cvttps_epu32(_mm256_mul_ps(rad, shells_per_mfp));
-        if (shell > SHELLS - 1) { // TODO
-            shell = SHELLS - 1;
-        }
+        __m256i max_shell = _mm256_set1_epi32(SHELLS - 1);
+        
+        shell = _mm256_min_epi32(shell, max_shell);
 
         // TODO
         // shell = [ph1, ph2, ph3, ..., ph8]
@@ -131,8 +129,9 @@ static void photon(void)
         // ...
         // heat[]
 
-        heat[shell] += (1.0f - albedo) * weight;
-        heat2[shell] += (1.0f - albedo) * (1.0f - albedo) * weight * weight; /* add up squares */
+        __m256 ht = _mm256_fnmadd_ps(weight, albedo, weight); // (1.0f - albedo) * weight
+        __m256 ht2 = _mm256_mul_ps(ht,ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
+        load_heats((unsigned int *)&shell, (float*)&ht, (float*)&ht2);
         weight *= albedo;
 
         /* roulette */
@@ -148,13 +147,8 @@ static void photon(void)
             xi1 = 2.0f * rand01() - 1.0f;
             xi2 = 2.0f * rand01() - 1.0f;
             t = xi1 * xi1 + xi2 * xi2;
-        } while (1.0f < t);
+        } while (1.0f < t); // esperar todos los t?
         
-        float _one = 1.0f;
-        __m256 one = _mm256_broadcast_ss(1.0f);
-
-        float _two = 2.0f;
-        __m256 two = _mm256_broadcast_ss(&_two);
 
         u = _mm256_fmsub_ps(two, t, one); // u = 2*t-1
         
@@ -176,9 +170,8 @@ int main(void)
     // start timer
     double start = wtime();
     // simulation
-    for (unsigned int i = 0; i < PHOTONS; ++i) { // TODO: incrementar de a 8 o tenerlo en cuenta
-        photon();
-    }
+    photon();
+
     // stop timer
     double end = wtime();
     assert(start <= end);
