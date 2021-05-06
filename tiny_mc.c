@@ -7,55 +7,9 @@
 #include <stdint.h>
 #include <x86intrin.h>
 
-/***
- * xoshiro128+
- * https://prng.di.unimi.it/xoshiro128plus.c
- ***/
-
-static uint32_t s[4];
-
-static inline uint32_t rotl(const uint32_t x, int k) {
-    return (x << k) | (x >> (32 - k));
-}
-
-static uint32_t next(void) {
-    const uint32_t result = s[0] + s[3];
-
-    const uint32_t t = s[1] << 9;
-
-    s[2] ^= s[0];
-    s[3] ^= s[1];
-    s[1] ^= s[2];
-    s[0] ^= s[3];
-
-    s[2] ^= t;
-
-    s[3] = rotl(s[3], 11);
-
-    return result;
-}
-
-static float float_from_uint32(uint32_t i) {
-    return (i >> 8) * 0x1.0p-24f;
-}
-
-static uint32_t mix32(uint32_t x) {
-    uint32_t z = (x += 0x9e3779b9);
-    z = (z ^ (z >> 14)) * 0xbf58476d;
-    z = (z ^ (z >> 11)) * 0x94d049bb;
-    return z ^ (z >> 15);
-}
-
-static void seed(uint32_t sd) {
-    s[0] = mix32(sd);
-    s[1] = mix32(s[0]);
-    s[2] = mix32(s[1]);
-    s[3] = mix32(s[2]);
-}
-
-static float rand01() {
-    return float_from_uint32(next());
-}
+extern void seed();
+extern __m256 rand01();
+extern __m256 fastlogf_simd(__m256 x);
 
 char t1[] = "Tiny Monte Carlo by Scott Prahl (http://omlc.ogi.edu)";
 char t2[] = "1 W Point Source Heating in Infinite Isotropic Scattering Medium";
@@ -67,7 +21,7 @@ char t3[] = "CPU version, adapted for PEAGPGPU by Gustavo Castellano"
 static float heat[SHELLS];
 static float heat2[SHELLS];
 
-void load_heats(unsigned int* shell, float* ht, float* ht2)
+void load_heat(unsigned int* shell, float* ht, float* ht2)
 {
     for (int i = 0; i < 8; i++)
     {
@@ -76,14 +30,30 @@ void load_heats(unsigned int* shell, float* ht, float* ht2)
     }
 }
 
+int count_photons(unsigned int* rmask)
+{
+    int count = 0;
+    for(int i = 0; i < 8; i++)
+    {
+        if (rmask[i] == 0xFFFFFFFF)
+            count++;
+    }
+
+    return count;
+}
+
 /***
  * Photon
  ***/
 
 static void photon(void)
 {
+    const __m256 zero = _mm256_set1_ps(0.0);
+    const __m256 zzo = _mm256_set1_ps(0.001);
+    const __m256 zo = _mm256_set1_ps(0.1);
     const __m256 one = _mm256_set1_ps(1.0);
     const __m256 two = _mm256_set1_ps(2.0);
+    const __m256 ten = _mm256_set1_ps(10.0);
     const __m256 albedo = _mm256_set1_ps(MU_S / (MU_S + MU_A));
     const __m256 shells_per_mfp = _mm256_set1_ps(1e4 / MICRONS_PER_SHELL / (MU_A + MU_S));
 
@@ -111,8 +81,8 @@ static void photon(void)
         __m256 y2 = _mm256_mul_ps(y, y);
         __m256 z2 = _mm256_mul_ps(z, z);
 
-        __m256 x2my2 = _mm256_add_ps(x2, y2);
-        __m256 tot = _mm256_add_ps(x2my2, z2);
+        __m256 x2py2 = _mm256_add_ps(x2, y2);
+        __m256 tot = _mm256_add_ps(x2py2, z2);
         __m256 rad = _mm256_sqrt_ps(tot);
 
         __m256i shell = _mm256_cvttps_epu32(_mm256_mul_ps(rad, shells_per_mfp));
@@ -120,7 +90,6 @@ static void photon(void)
         
         shell = _mm256_min_epi32(shell, max_shell);
 
-        // TODO
         // shell = [ph1, ph2, ph3, ..., ph8]
         //ph1 = 1
         //ph2 = 1
@@ -131,15 +100,22 @@ static void photon(void)
 
         __m256 ht = _mm256_fnmadd_ps(weight, albedo, weight); // (1.0f - albedo) * weight
         __m256 ht2 = _mm256_mul_ps(ht,ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
-        load_heats((unsigned int *)&shell, (float*)&ht, (float*)&ht2);
-        weight *= albedo;
-
+        load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2);
+        weight *= albedo; // usar intrinseca?
+        
         /* roulette */
-        if (weight < 0.001f) { // TODO
-            if (rand01() > 0.1f)
-                break;
-            weight /= 0.1f;
-        }
+        __m256 wmask = _mm256_cmp_ps(weight, zzo, _CMP_LT_OS);
+        __m256 weightX10 = _mm256_mul_ps(weight, ten);
+        weight = _m256_blendv_ps(weight, weightX10, wmask);
+
+        __m256 rmask = _mm256_cmp_ps(rand01(), zo, _CMP_GT_OS);
+        weight = _m256_blendv_ps(weight, one, rmask);
+        x = _m256_blendv_ps(x, zero, rmask);
+        y = _m256_blendv_ps(y, zero, rmask);
+        z = _m256_blendv_ps(z, zero, rmask);
+
+        i += count_photons((unsigned int*)&rmask);
+
 
         /* New direction, rejection method */
         float xi1, xi2; // TODO
@@ -147,8 +123,7 @@ static void photon(void)
             xi1 = 2.0f * rand01() - 1.0f;
             xi2 = 2.0f * rand01() - 1.0f;
             t = xi1 * xi1 + xi2 * xi2;
-        } while (1.0f < t); // esperar todos los t?
-        
+        } while (1.0f < t);
 
         u = _mm256_fmsub_ps(two, t, one); // u = 2*t-1
         

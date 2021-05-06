@@ -49,20 +49,23 @@ __m256 fastlog2f_simd(__m256 x)
       __m256i i;
   } vx = {x};
 
-  int aux[8];
-  _mm256_storeu_si256 ((__m256i*)aux, vx.i);
-  int n = sizeof(aux)/sizeof(aux[0]);
-  reverse(aux,n);
-  vx.i = _mm256_loadu_si256((__m256i*)aux);
+//   int aux[8];
+//   _mm256_storeu_si256 ((__m256i*)aux, vx.i);
+//   int n = sizeof(aux)/sizeof(aux[0]);
+//   reverse(aux,n);
+//   vx.i = _mm256_loadu_si256((__m256i*)aux);
 
   __m256i hexa1 = _mm256_set1_epi32(0x007FFFFF);
   __m256i hexa2 = _mm256_set1_epi32(0x3f000000);
 
-  __m256i and12 = _mm256_castps_si256(
-      _mm256_and_ps(_mm256_castsi256_ps(vx.i),_mm256_castsi256_ps(hexa1)));
+//   __m256i and12 = _mm256_castps_si256(
+//       _mm256_and_ps(_mm256_castsi256_ps(vx.i),_mm256_castsi256_ps(hexa1)));
 
-  __m256i or12 = _mm256_castps_si256(
-      _mm256_or_ps(_mm256_castsi256_ps(and12),_mm256_castsi256_ps(hexa2)));
+//   __m256i or12 = _mm256_castps_si256(
+//       _mm256_or_ps(_mm256_castsi256_ps(and12),_mm256_castsi256_ps(hexa2)));
+
+  __m256i and12 = _mm256_and_si256(vx.i,hexa1);
+  __m256i or12 = _mm256_or_si256(and12,hexa2);
 
   union {
       __m256i i;
@@ -94,14 +97,14 @@ __m256 fastlogf_simd(__m256 x)
 
 int main(void)
 {
-    __m256 a = _mm256_set_ps(0.1f,0.2f,0.3f,0.5f,0.6f,0.7f,0.8f,0.9f);
+    __m256 a = _mm256_setr_ps(0.1f,0.05f,0.3f,0.5f,0.6f,0.7f,0.8f,0.9f);
 
     float c[8];
     _mm256_storeu_ps(c, fastlogf_simd(a));
     for(int i=0; i<8; i++) printf("%f ", c[i]); printf("\n");
 
-    float g = fastlogf(0.5f);
+    float g = fastlogf(0.05f);
     printf("%f\n", g);
 
-    printf("%f\n", logf(0.5f));
+    printf("%f\n", logf(0.05f));
 }
