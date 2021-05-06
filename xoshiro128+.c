@@ -68,10 +68,29 @@ void seed(__m256i sd) {
     s[3] = mix32(s[2]);
 }
 
+/*
 __m256 rand01() {
     __m256i _n = _mm256_abs_epi32(next());
     __m256 uint_max = _mm256_set1_ps((float)UINT_MAX);
     __m256 n = _mm256_cvtepi32_ps(_n) / uint_max;
+
+    return n;
+}
+*/
+
+__m256 rand01() {
+    __m256i __n = next();
+    unsigned int* _n = (unsigned int*)&__n;
+
+    __m256 n = _mm256_setr_ps(
+        _n[0] / (float) UINT_MAX, 
+        _n[1] / (float) UINT_MAX, 
+        _n[2] / (float) UINT_MAX,
+        _n[3] / (float) UINT_MAX, 
+        _n[4] / (float) UINT_MAX,
+        _n[5] / (float) UINT_MAX,
+        _n[6] / (float) UINT_MAX,
+        _n[7] / (float) UINT_MAX);
 
     return n;
 }
