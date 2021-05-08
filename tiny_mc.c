@@ -6,8 +6,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <x86intrin.h>
+#include <stdbool.h>
 
-extern void seed();
+extern void seed(__m256i sd);
 extern __m256 rand01();
 extern __m256 fastlogf_simd(__m256 x);
 
@@ -21,20 +22,18 @@ char t3[] = "CPU version, adapted for PEAGPGPU by Gustavo Castellano"
 static float heat[SHELLS];
 static float heat2[SHELLS];
 
-void load_heat(unsigned int* shell, float* ht, float* ht2)
+static void load_heat(unsigned int* shell, float* ht, float* ht2)
 {
-    for (int i = 0; i < 8; i++)
-    {
+    for (int i = 0; i < 8; i++) {
         heat[shell[i]] += ht[i];
         heat2[shell[i]] += ht2[i];
     }
 }
 
-int count_photons(unsigned int* rmask)
+static int count_photons(unsigned int* rmask)
 {
     int count = 0;
-    for(int i = 0; i < 8; i++)
-    {
+    for(int i = 0; i < 8; i++) {
         if (rmask[i] == 0xFFFFFFFF)
             count++;
     }
@@ -42,10 +41,18 @@ int count_photons(unsigned int* rmask)
     return count;
 }
 
+static bool has_true(unsigned int* oneltt)
+{
+    for (int i = 0; i < 8; i++) {
+        if (oneltt[i] == 0xFFFFFFFF)
+            return true;
+    }
+    return false;
+}
+
 /***
  * Photon
  ***/
-
 static void photon(void)
 {
     const __m256 zero = _mm256_set1_ps(0.0);
@@ -70,7 +77,8 @@ static void photon(void)
     int i = 0;
     while (i < PHOTONS) {
         /* move */
-        __m256 t = -logf(rand01()); // TODO
+        __m256 pt = rand01();
+        __m256 t = -fastlogf_simd(pt);
 
         x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
         y = _mm256_fmadd_ps(t, v, y);
@@ -85,52 +93,57 @@ static void photon(void)
         __m256 tot = _mm256_add_ps(x2py2, z2);
         __m256 rad = _mm256_sqrt_ps(tot);
 
-        __m256i shell = _mm256_cvttps_epu32(_mm256_mul_ps(rad, shells_per_mfp));
+        __m256i volatile shell = _mm256_cvttps_epi32(
+            _mm256_mul_ps(rad, shells_per_mfp));
         __m256i max_shell = _mm256_set1_epi32(SHELLS - 1);
         
         shell = _mm256_min_epi32(shell, max_shell);
 
-        // shell = [ph1, ph2, ph3, ..., ph8]
-        //ph1 = 1
-        //ph2 = 1
-        // heat[1] += ...
-        // heat[1] += ...
-        // ...
-        // heat[]
-
         __m256 ht = _mm256_fnmadd_ps(weight, albedo, weight); // (1.0f - albedo) * weight
-        __m256 ht2 = _mm256_mul_ps(ht,ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
+        __m256 ht2 = _mm256_mul_ps(ht, ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
         load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2);
-        weight *= albedo; // usar intrinseca?
+        weight = _mm256_mul_ps(weight, albedo);
         
         /* roulette */
         __m256 wmask = _mm256_cmp_ps(weight, zzo, _CMP_LT_OS);
         __m256 weightX10 = _mm256_mul_ps(weight, ten);
-        weight = _m256_blendv_ps(weight, weightX10, wmask);
+        weight = _mm256_blendv_ps(weight, weightX10, wmask);
 
-        __m256 rmask = _mm256_cmp_ps(rand01(), zo, _CMP_GT_OS);
-        weight = _m256_blendv_ps(weight, one, rmask);
-        x = _m256_blendv_ps(x, zero, rmask);
-        y = _m256_blendv_ps(y, zero, rmask);
-        z = _m256_blendv_ps(z, zero, rmask);
+        __m256 volatile rmask = _mm256_cmp_ps(rand01(), zo, _CMP_GT_OS); // rmask esta dando cualquier cosa
+
+        weight = _mm256_blendv_ps(weight, one, rmask);
+        x = _mm256_blendv_ps(x, zero, rmask);
+        y = _mm256_blendv_ps(y, zero, rmask);
+        z = _mm256_blendv_ps(z, zero, rmask);
 
         i += count_photons((unsigned int*)&rmask);
 
-
         /* New direction, rejection method */
-        float xi1, xi2; // TODO
+        __m256 xi1, xi2;
+        __m256 oneltt = _mm256_cmp_ps(one, one, _CMP_TRUE_US); // prende todo el vector
         do {
-            xi1 = 2.0f * rand01() - 1.0f;
-            xi2 = 2.0f * rand01() - 1.0f;
-            t = xi1 * xi1 + xi2 * xi2;
-        } while (1.0f < t);
+            __m256 _xi1 = _mm256_fmsub_ps(two, rand01(), one); // 2.0f * rand - 1.0f
+            __m256 _xi2 = _mm256_fmsub_ps(two, rand01(), one);
+
+            xi1 = _mm256_blendv_ps(xi1, _xi1, oneltt);
+            xi2 = _mm256_blendv_ps(xi2, _xi2, oneltt);
+
+            __m256 _t = _mm256_add_ps(_mm256_mul_ps(xi1, xi1),
+                _mm256_mul_ps(xi2, xi2));
+
+            t = _mm256_blendv_ps(t, _t, oneltt);
+
+            oneltt = _mm256_cmp_ps(one, t, _CMP_LT_OS); // T si 1.0 < t
+
+        } while (has_true((unsigned int*)&oneltt));
 
         u = _mm256_fmsub_ps(two, t, one); // u = 2*t-1
         
-        __m256 sqr = _mm256_sqrt_ps(_mm256_div_ps(_mm256_fnmadd_ps(u, u, one), t)); // sqrtf((1.0f - u * u)
+        __m256 srt = _mm256_sqrt_ps(
+            _mm256_div_ps(_mm256_fnmadd_ps(u, u, one), t)); // sqrtf((1.0f - u * u)
         
-        v = _mm256_mul_ps(xi1, sqr);
-        w = _mm256_mul_ps(xi2, sqr);
+        v = _mm256_mul_ps(xi1, srt);
+        w = _mm256_mul_ps(xi2, srt);
     }
 }
 
@@ -140,8 +153,14 @@ static void photon(void)
 
 int main(void)
 {
-    // configure RNG
-    seed(SEED);
+    // configure xoshiro128+
+    srand(SEED);
+
+    __m256i sd = _mm256_set_epi32(rand(), rand(), rand(), rand(), 
+        rand(), rand(), rand(), rand());
+
+    seed(sd);
+
     // start timer
     double start = wtime();
     // simulation
