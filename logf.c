@@ -8,41 +8,41 @@
 #include <stdio.h>
 #include <x86intrin.h>
 
-float fastlog2f(float x)
-{
-    union {
-        float f;
-        unsigned int i;
-    } vx = {x};
+// float fastlog2f(float x)
+// {
+//     union {
+//         float f;
+//         unsigned int i;
+//     } vx = {x};
 
-    union {
-        unsigned int i;
-        float f;
-    } mx = {(vx.i & 0x007FFFFF) | 0x3f000000 };
+//     union {
+//         unsigned int i;
+//         float f;
+//     } mx = {(vx.i & 0x007FFFFF) | 0x3f000000 };
 
-    float y = vx.i;
-    y *= 1.1920928955078125e-7f;
-   return y - 124.22551499f
-            - 1.498030302f * mx.f
-            - 1.72587999f / (0.3520887068f + mx.f);
-}
+//     float y = vx.i;
+//     y *= 1.1920928955078125e-7f;
+//    return y - 124.22551499f
+//             - 1.498030302f * mx.f
+//             - 1.72587999f / (0.3520887068f + mx.f);
+// }
 
-float fastlogf(float x)
-{
-    return 0.69314718f * fastlog2f(x);
-}
+// float fastlogf(float x)
+// {
+//     return 0.69314718f * fastlog2f(x);
+// }
 
-void reverse(int arr[], int n)
-{
-    for (int low = 0, high = n - 1; low < high; low++, high--)
-    {
-        int temp = arr[low];
-        arr[low] = arr[high];
-        arr[high] = temp;
-    }
-}
+// void reverse(int arr[], int n)
+// {
+//     for (int low = 0, high = n - 1; low < high; low++, high--)
+//     {
+//         int temp = arr[low];
+//         arr[low] = arr[high];
+//         arr[high] = temp;
+//     }
+// }
 
-__m256 fastlog2f_simd(__m256 x)
+static __m256 fastlog2f_simd(__m256 x)
 {
   union {
       __m256 f;
@@ -95,6 +95,7 @@ __m256 fastlogf_simd(__m256 x)
   return _mm256_mul_ps(const6,fastlog2f_simd(x));
 }
 
+/*
 int main(void)
 {
     __m256 a = _mm256_setr_ps(0.1f,0.05f,0.3f,0.5f,0.6f,0.7f,0.8f,0.9f);
@@ -108,3 +109,4 @@ int main(void)
 
     printf("%f\n", logf(0.05f));
 }
+*/
