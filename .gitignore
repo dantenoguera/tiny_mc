@@ -1,2 +1,5 @@
 tiny_mc
-*.o
+**.o
+**.out
+**.pdf
+.clang-format
