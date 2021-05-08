@@ -9,14 +9,6 @@
 
 #define SEED (time(NULL))
 
-double wtime(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-
-    return 1e-9 * ts.tv_nsec + (double)ts.tv_sec;
-}
-
 static __m256i s[4];
 
 static inline __m256i rotl(const __m256i x, int k) {
@@ -25,7 +17,6 @@ static inline __m256i rotl(const __m256i x, int k) {
 
     return _mm256_or_si256(xklshift, x32krshift);
 }
-
 
 static __m256i next(void) {
     const __m256i result = _mm256_add_epi32(s[0], s[3]);
@@ -68,16 +59,6 @@ void seed(__m256i sd) {
     s[3] = mix32(s[2]);
 }
 
-/*
-__m256 rand01() {
-    __m256i _n = _mm256_abs_epi32(next());
-    __m256 uint_max = _mm256_set1_ps((float)UINT_MAX);
-    __m256 n = _mm256_cvtepi32_ps(_n) / uint_max;
-
-    return n;
-}
-*/
-
 __m256 rand01() {
     __m256i __n = next();
     unsigned int* _n = (unsigned int*)&__n;
@@ -93,32 +74,4 @@ __m256 rand01() {
         _n[7] / (float) UINT_MAX);
 
     return n;
-}
-
-int main() {
-
-    srand(SEED);
-
-    int _sd[8];
-    for (int i = 0; i < 8; i++)
-        _sd[i] = rand();
-
-    __m256i sd = _mm256_set_epi32(_sd[0] , _sd[1], _sd[2], _sd[3],
-        _sd[4], _sd[5], _sd[6], _sd[7]);
-
-    seed(sd);
-
-    __m256 a;
-    double start = wtime();
-    for (int i = 0; i < 1000000000 / 8; i++)
-    {
-        a = rand01();
-    }
-    double end = wtime();
-    assert(start <= end);
-
-    printf("last value: %f %f %f %f %f %f %f %f \n", 
-        a[0], a[1] , a[2], a[3], a[4], a[5], a[6], a[7]);
-    printf("elapsed: %lf\n", end - start);
-    return 0;
 }
