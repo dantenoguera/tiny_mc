@@ -1,12 +1,15 @@
 #include "params.h"
 #include "wtime.h"
 
+#include <stdlib.h>
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <x86intrin.h>
 #include <stdbool.h>
+
+#define DEBUG 0
 
 extern void seed(__m256i sd);
 extern __m256 rand01();
@@ -30,21 +33,21 @@ static void load_heat(unsigned int* shell, float* ht, float* ht2)
     }
 }
 
-static int count_photons(unsigned int* rmask)
+static int count_photons(unsigned int* breakmask)
 {
     int count = 0;
     for(int i = 0; i < 8; i++) {
-        if (rmask[i] == 0xFFFFFFFF)
+        if (breakmask[i] == 0xFFFFFFFF)
             count++;
     }
 
     return count;
 }
 
-static bool has_true(unsigned int* oneltt)
+static bool has_true(unsigned int* bigtmask)
 {
     for (int i = 0; i < 8; i++) {
-        if (oneltt[i] == 0xFFFFFFFF)
+        if (bigtmask[i] == 0xFFFFFFFF)
             return true;
     }
     return false;
@@ -65,98 +68,148 @@ static void photon(void)
     const __m256 shells_per_mfp = _mm256_set1_ps(1e4 / MICRONS_PER_SHELL / (MU_A + MU_S));
 
     /* launch */
-    __m256 x = _mm256_set1_ps(0.0);
-    __m256 y = _mm256_set1_ps(0.0);
-    __m256 z = _mm256_set1_ps(0.0);
-    __m256 u = _mm256_set1_ps(0.0);
-    __m256 v = _mm256_set1_ps(0.0);
-    __m256 w = _mm256_set1_ps(1.0);
+    __m256 x = zero;
+    __m256 y = zero;
+    __m256 z = zero;
+    __m256 u = zero;
+    __m256 v = zero;
+    __m256 w = one;
+    __m256 weight = one;
 
-    __m256 weight = _mm256_set1_ps(1.0);
-
-    int i = 0;
-    while (i < PHOTONS) {
+    int cph = 0; // count simulated photons
+    while (cph < PHOTONS) {
         /* move */
-        __m256 pt = rand01();
-        __m256 t = -fastlogf_simd(pt);
-
+        __m256 t = -fastlogf_simd(rand01());
         x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
-        y = _mm256_fmadd_ps(t, v, y);
-        z = _mm256_fmadd_ps(t, w, z);
+        y = _mm256_fmadd_ps(t, v, y); 
+        z = _mm256_fmadd_ps(t, w, z); 
         
         /* absorb */
         __m256 x2 = _mm256_mul_ps(x, x);
         __m256 y2 = _mm256_mul_ps(y, y);
         __m256 z2 = _mm256_mul_ps(z, z);
-
-        __m256 x2py2 = _mm256_add_ps(x2, y2);
-        __m256 tot = _mm256_add_ps(x2py2, z2);
-        __m256 rad = _mm256_sqrt_ps(tot);
+        __m256 sum = _mm256_add_ps(x2, _mm256_add_ps(y2, z2));
+        __m256 rad = _mm256_sqrt_ps(sum);
 
         __m256i volatile shell = _mm256_cvttps_epi32(
             _mm256_mul_ps(rad, shells_per_mfp));
+
         __m256i max_shell = _mm256_set1_epi32(SHELLS - 1);
-        
-        shell = _mm256_min_epi32(shell, max_shell);
+        shell = _mm256_min_epi32(shell, max_shell); // shell = min(shell, SHELLS - 1)
 
         __m256 ht = _mm256_fnmadd_ps(weight, albedo, weight); // (1.0f - albedo) * weight
         __m256 ht2 = _mm256_mul_ps(ht, ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
-        load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2);
+        load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2); // sacar afuera?
+
         weight = _mm256_mul_ps(weight, albedo);
+
+#if DEBUG
+            printf("weight = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                weight[0], weight[1], weight[2], weight[3],
+                weight[4], weight[5], weight[6], weight[7]);
+#endif
         
         /* roulette */
         __m256 wmask = _mm256_cmp_ps(weight, zzo, _CMP_LT_OS);
+
+#if DEBUG
+            printf("wmask (weight < 0.001) = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                wmask[0], wmask[1], wmask[2], wmask[3],
+                wmask[4], wmask[5], wmask[6], wmask[7]);
+#endif
+
         __m256 weightX10 = _mm256_mul_ps(weight, ten);
         weight = _mm256_blendv_ps(weight, weightX10, wmask);
 
-        __m256 volatile rmask = _mm256_cmp_ps(rand01(), zo, _CMP_GT_OS); // rmask esta dando cualquier cosa
+        __m256 rand = rand01();
 
-        weight = _mm256_blendv_ps(weight, one, rmask);
-        x = _mm256_blendv_ps(x, zero, rmask);
-        y = _mm256_blendv_ps(y, zero, rmask);
-        z = _mm256_blendv_ps(z, zero, rmask);
+#if DEBUG
+            printf("rand = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                rand[0], rand[1], rand[2], rand[3],
+                rand[4], rand[5], rand[6], rand[7]);
+#endif
 
-        i += count_photons((unsigned int*)&rmask);
+        __m256 rmask = _mm256_cmp_ps(rand, zo, _CMP_GT_OS); 
+
+#if DEBUG
+            printf("rmask (0.1 < rand) = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                rmask[0], rmask[1], rmask[2], rmask[3],
+                rmask[4], rmask[5], rmask[6], rmask[7]);
+#endif
+        
+        __m256 volatile breakmask = _mm256_and_ps(wmask, rmask); // sin volatile parece que nos vuela la variable gcc
+
+        weight = _mm256_blendv_ps(weight, one, breakmask);
+
+#if DEBUG
+            printf("weight despues = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                weight[0], weight[1], weight[2], weight[3],
+                weight[4], weight[5], weight[6], weight[7]);
+#endif
+
+        x = _mm256_blendv_ps(x, zero, breakmask);
+        y = _mm256_blendv_ps(y, zero, breakmask);
+        z = _mm256_blendv_ps(z, zero, breakmask);
+
+        cph += count_photons((unsigned int*)& breakmask);
 
         /* New direction, rejection method */
-        __m256 xi1, xi2;
-        __m256 oneltt = _mm256_cmp_ps(one, one, _CMP_TRUE_US); // prende todo el vector
+        __m256 xi1 = zero;
+        __m256 xi2 = zero; 
+        __m256 bigtmask = _mm256_cmp_ps(one, one, _CMP_TRUE_US); // prende todo el vector
         do {
             __m256 _xi1 = _mm256_fmsub_ps(two, rand01(), one); // 2.0f * rand - 1.0f
             __m256 _xi2 = _mm256_fmsub_ps(two, rand01(), one);
 
-            xi1 = _mm256_blendv_ps(xi1, _xi1, oneltt);
-            xi2 = _mm256_blendv_ps(xi2, _xi2, oneltt);
+            xi1 = _mm256_blendv_ps(xi1, _xi1, bigtmask);
+            xi2 = _mm256_blendv_ps(xi2, _xi2, bigtmask);
 
             __m256 _t = _mm256_add_ps(_mm256_mul_ps(xi1, xi1),
                 _mm256_mul_ps(xi2, xi2));
 
-            t = _mm256_blendv_ps(t, _t, oneltt);
+            t = _mm256_blendv_ps(t, _t, bigtmask);
 
-            oneltt = _mm256_cmp_ps(one, t, _CMP_LT_OS); // T si 1.0 < t
+            bigtmask = _mm256_cmp_ps(one, t, _CMP_LT_OS); // T si 1.0 < t
 
-        } while (has_true((unsigned int*)&oneltt));
+#if DEBUG
+            printf("bigtmask (1.0f < t) = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0],
+                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0]);
+#endif
 
-        u = _mm256_fmsub_ps(two, t, one); // u = 2*t-1
+        } while (has_true((unsigned int*)&bigtmask));
+
+#if DEBUG
+            printf("bigtmask fuera = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
+                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0],
+                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0]);
+#endif
+
+        u = _mm256_fmsub_ps(two, t, one); // u = 2 * t - 1
         
         __m256 srt = _mm256_sqrt_ps(
             _mm256_div_ps(_mm256_fnmadd_ps(u, u, one), t)); // sqrtf((1.0f - u * u)
         
         v = _mm256_mul_ps(xi1, srt);
         w = _mm256_mul_ps(xi2, srt);
+
+#if DEBUG
+        printf("cph = %d\n", cph);
+#endif
+
     }
 }
 
 /***
  * Main matter
  ***/
-
 int main(void)
 {
     // configure xoshiro128+
     srand(SEED);
 
-    __m256i sd = _mm256_set_epi32(rand(), rand(), rand(), rand(), 
+    __m256i sd = _mm256_set_epi32(
+        rand(), rand(), rand(), rand(), 
         rand(), rand(), rand(), rand());
 
     seed(sd);
@@ -165,7 +218,6 @@ int main(void)
     double start = wtime();
     // simulation
     photon();
-
     // stop timer
     double end = wtime();
     assert(start <= end);
