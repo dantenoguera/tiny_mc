@@ -9,8 +9,6 @@
 #include <x86intrin.h>
 #include <stdbool.h>
 
-#define DEBUG 0
-
 extern void seed(__m256i sd);
 extern __m256 rand01();
 extern __m256 fastlogf_simd(__m256 x);
@@ -20,12 +18,12 @@ char t2[] = "1 W Point Source Heating in Infinite Isotropic Scattering Medium";
 char t3[] = "CPU version, adapted for PEAGPGPU by Gustavo Castellano"
             " and Nicolas Wolovick";
 
-
 // global state, heat and heat square in each shell
 static float heat[SHELLS];
 static float heat2[SHELLS];
 
-static void load_heat(unsigned int* shell, float* ht, float* ht2)
+static inline void load_heat(unsigned int * const restrict shell, 
+        float * const restrict ht, float * const restrict ht2)
 {
     for (int i = 0; i < 8; i++) {
         heat[shell[i]] += ht[i];
@@ -33,24 +31,15 @@ static void load_heat(unsigned int* shell, float* ht, float* ht2)
     }
 }
 
-static int count_photons(unsigned int* breakmask)
+static inline int count_set_bits(int n)
 {
-    int count = 0;
-    for(int i = 0; i < 8; i++) {
-        if (breakmask[i] == 0xFFFFFFFF)
-            count++;
+    unsigned int count = 0;
+    while (n) {
+        count += n & 1;
+        n >>= 1;
     }
 
     return count;
-}
-
-static bool has_true(unsigned int* bigtmask)
-{
-    for (int i = 0; i < 8; i++) {
-        if (bigtmask[i] == 0xFFFFFFFF)
-            return true;
-    }
-    return false;
 }
 
 /***
@@ -91,67 +80,35 @@ static void photon(void)
         __m256 sum = _mm256_add_ps(x2, _mm256_add_ps(y2, z2));
         __m256 rad = _mm256_sqrt_ps(sum);
 
-        __m256i volatile shell = _mm256_cvttps_epi32(
+        __m256i shell = _mm256_cvttps_epi32(
             _mm256_mul_ps(rad, shells_per_mfp));
 
         __m256i max_shell = _mm256_set1_epi32(SHELLS - 1);
         shell = _mm256_min_epi32(shell, max_shell); // shell = min(shell, SHELLS - 1)
-
+        
         __m256 ht = _mm256_fnmadd_ps(weight, albedo, weight); // (1.0f - albedo) * weight
         __m256 ht2 = _mm256_mul_ps(ht, ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
         load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2); // sacar afuera?
 
         weight = _mm256_mul_ps(weight, albedo);
 
-#if DEBUG
-            printf("weight = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                weight[0], weight[1], weight[2], weight[3],
-                weight[4], weight[5], weight[6], weight[7]);
-#endif
-        
         /* roulette */
         __m256 wmask = _mm256_cmp_ps(weight, zzo, _CMP_LT_OS);
-
-#if DEBUG
-            printf("wmask (weight < 0.001) = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                wmask[0], wmask[1], wmask[2], wmask[3],
-                wmask[4], wmask[5], wmask[6], wmask[7]);
-#endif
 
         __m256 weightX10 = _mm256_mul_ps(weight, ten);
         weight = _mm256_blendv_ps(weight, weightX10, wmask);
 
-        __m256 rand = rand01();
+        __m256 rmask = _mm256_cmp_ps(rand01(), zo, _CMP_GT_OS); 
 
-#if DEBUG
-            printf("rand = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                rand[0], rand[1], rand[2], rand[3],
-                rand[4], rand[5], rand[6], rand[7]);
-#endif
-
-        __m256 rmask = _mm256_cmp_ps(rand, zo, _CMP_GT_OS); 
-
-#if DEBUG
-            printf("rmask (0.1 < rand) = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                rmask[0], rmask[1], rmask[2], rmask[3],
-                rmask[4], rmask[5], rmask[6], rmask[7]);
-#endif
-        
-        __m256 volatile breakmask = _mm256_and_ps(wmask, rmask); // sin volatile parece que nos vuela la variable gcc
+        __m256 breakmask = _mm256_and_ps(wmask, rmask);
 
         weight = _mm256_blendv_ps(weight, one, breakmask);
-
-#if DEBUG
-            printf("weight despues = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                weight[0], weight[1], weight[2], weight[3],
-                weight[4], weight[5], weight[6], weight[7]);
-#endif
 
         x = _mm256_blendv_ps(x, zero, breakmask);
         y = _mm256_blendv_ps(y, zero, breakmask);
         z = _mm256_blendv_ps(z, zero, breakmask);
 
-        cph += count_photons((unsigned int*)& breakmask);
+        cph += count_set_bits(_mm256_movemask_ps(breakmask));
 
         /* New direction, rejection method */
         __m256 xi1 = zero;
@@ -171,19 +128,7 @@ static void photon(void)
 
             bigtmask = _mm256_cmp_ps(one, t, _CMP_LT_OS); // T si 1.0 < t
 
-#if DEBUG
-            printf("bigtmask (1.0f < t) = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0],
-                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0]);
-#endif
-
-        } while (has_true((unsigned int*)&bigtmask));
-
-#if DEBUG
-            printf("bigtmask fuera = {%f, %f, %f, %f, %f, %f, %f, %f}\n", 
-                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0],
-                bigtmaskmask[0], bigtmask[0], bigtmask[0], bigtmask[0]);
-#endif
+        } while (_mm256_movemask_ps(bigtmask));
 
         u = _mm256_fmsub_ps(two, t, one); // u = 2 * t - 1
         
@@ -192,11 +137,6 @@ static void photon(void)
         
         v = _mm256_mul_ps(xi1, srt);
         w = _mm256_mul_ps(xi2, srt);
-
-#if DEBUG
-        printf("cph = %d\n", cph);
-#endif
-
     }
 }
 
