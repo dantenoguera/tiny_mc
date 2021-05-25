@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <x86intrin.h>
 #include <stdbool.h>
+#include <omp.h>
 
 extern void seed(__m256i sd);
 extern __m256 rand01();
@@ -21,18 +22,17 @@ char t3[] = "CPU version, adapted for PEAGPGPU by Gustavo Castellano"
 // global state, heat and heat square in each shell
 static float heat[SHELLS];
 static float heat2[SHELLS];
+#pragma omp threadprivate(heat, heat2)
 
 static inline void load_heat(unsigned int * const restrict shell, 
-        float * const restrict ht, float * const restrict ht2)
-{
+        float * const restrict ht, float * const restrict ht2) {
     for (int i = 0; i < 8; i++) {
         heat[shell[i]] += ht[i];
         heat2[shell[i]] += ht2[i];
     }
 }
 
-static inline int count_set_bits(int n)
-{
+static inline int count_set_bits(int n) {
     unsigned int count = 0;
     while (n) {
         count += n & 1;
@@ -42,10 +42,16 @@ static inline int count_set_bits(int n)
     return count;
 }
 
+/*
+ TODO: 
+    - heats para c/thread
+    - estado s para c/thread
+    - cph atomic?
+*/
 /***
  * Photon
  ***/
-static void photon(void)
+static void photon(int threads)
 {
     const __m256 zero = _mm256_set1_ps(0.0);
     const __m256 zzo = _mm256_set1_ps(0.001);
@@ -66,7 +72,7 @@ static void photon(void)
     __m256 weight = one;
 
     int cph = 0; // count simulated photons
-    while (cph < PHOTONS) {
+    while (cph < PHOTONS / threads) {
         /* move */
         __m256 t = -fastlogf_simd(rand01());
         x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
@@ -80,7 +86,7 @@ static void photon(void)
         __m256 sum = _mm256_add_ps(x2, _mm256_add_ps(y2, z2));
         __m256 rad = _mm256_sqrt_ps(sum);
 
-        __m256i shell = _mm256_cvttps_epi32(
+        __m256i volatile shell = _mm256_cvttps_epi32(
             _mm256_mul_ps(rad, shells_per_mfp));
 
         __m256i max_shell = _mm256_set1_epi32(SHELLS - 1);
@@ -88,7 +94,7 @@ static void photon(void)
         
         __m256 ht = _mm256_fnmadd_ps(weight, albedo, weight); // (1.0f - albedo) * weight
         __m256 ht2 = _mm256_mul_ps(ht, ht); // (1.0f - albedo) * (1.0f - albedo) * weight * weight
-        load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2); // sacar afuera?
+        load_heat((unsigned int *)&shell, (float*)&ht, (float*)&ht2); // sacar?
 
         weight = _mm256_mul_ps(weight, albedo);
 
@@ -137,6 +143,7 @@ static void photon(void)
         
         v = _mm256_mul_ps(xi1, srt);
         w = _mm256_mul_ps(xi2, srt);
+    
     }
 }
 
@@ -146,18 +153,66 @@ static void photon(void)
 int main(void)
 {
     // configure xoshiro128+
+    const int threads = omp_get_max_threads();
+    printf("threads = %d\n", threads);
+    
+    omp_sched_t kind;
+    int chunk_size;
+    omp_get_schedule(&kind, &chunk_size);
+
+    printf("schedule: ");
+    switch(kind)
+    {
+        case omp_sched_static:
+            printf("static");
+            break;
+        case omp_sched_dynamic:
+            printf("dynamic");
+            break;
+        case omp_sched_guided:
+            printf("guided");
+            break;
+        case omp_sched_auto:
+            printf("auto");
+            break;
+        default:
+            printf("other (implementation specific)");
+            break;
+    }
+    printf("\nchunks: %d\n", chunk_size);
+ 
+    __m256i seeds[threads];
+
     srand(SEED);
+    for (int i = 0; i < threads; i++) {
+        seeds[i] = _mm256_set_epi32(
+                rand(), rand(), rand(), rand(),
+                rand(), rand(), rand(), rand());
+    }
 
-    __m256i sd = _mm256_set_epi32(
-        rand(), rand(), rand(), rand(), 
-        rand(), rand(), rand(), rand());
-
-    seed(sd);
+    #pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        seed(seeds[tid]);
+    }
 
     // start timer
     double start = wtime();
     // simulation
-    photon();
+
+    float heat_ac[SHELLS] = {0.0f};
+    float heat2_ac[SHELLS] = {0.0f};
+
+    #pragma omp parallel reduction(+ : heat_ac, heat2_ac)
+    {
+        photon(threads);
+
+        for (int i = 0; i < SHELLS; i++) {
+            heat_ac[i] += heat[i];
+            heat2_ac[i] += heat2[i];
+        }
+    }
+
     // stop timer
     double end = wtime();
     assert(start <= end);
@@ -178,10 +233,10 @@ int main(void)
     float t = 4.0f * M_PI * powf(MICRONS_PER_SHELL, 3.0f) * PHOTONS / 1e12;
     for (unsigned int i = 0; i < SHELLS - 1; ++i) {
         printf("%6.0f\t%12.5f\t%12.5f\n", i * (float)MICRONS_PER_SHELL,
-               heat[i] / t / (i * i + i + 1.0 / 3.0),
-               sqrt(heat2[i] - heat[i] * heat[i] / PHOTONS) / t / (i * i + i + 1.0f / 3.0f));
+               heat_ac[i] / t / (i * i + i + 1.0 / 3.0),
+               sqrt(heat2_ac[i] - heat_ac[i] * heat_ac[i] / PHOTONS) / t / (i * i + i + 1.0f / 3.0f));
     }
-    printf("# extra\t%12.5f\n", heat[SHELLS - 1] / PHOTONS);
+    printf("# extra\t%12.5f\n", heat_ac[SHELLS - 1] / PHOTONS);
 #else
     printf("%lf", 1e-3 * PHOTONS / elapsed);
 #endif

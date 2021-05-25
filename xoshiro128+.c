@@ -6,10 +6,12 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <x86intrin.h>
+#include <omp.h>
 
 #define SEED (time(NULL))
 
 static __m256i s[4];
+#pragma omp threadprivate(s)
 
 static inline __m256i rotl(const __m256i x, int k) {
     __m256i xklshift = _mm256_slli_epi32(x, k);
