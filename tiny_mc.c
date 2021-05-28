@@ -72,7 +72,8 @@ static void photon(int threads)
     __m256 weight = one;
 
     int cph = 0; // count simulated photons
-    while (cph < PHOTONS / threads) {
+    int nphotons = _nphotons[omp_get_thread_num()];
+    while (cph < nphotons) {
         /* move */
         __m256 t = -fastlogf_simd(rand01());
         x = _mm256_fmadd_ps(t, u, x); // x = t * u + x
@@ -154,12 +155,15 @@ int main(void)
 {
     // configure xoshiro128+
     const int threads = omp_get_max_threads();
+#if VERBOSE
     printf("threads = %d\n", threads);
+#endif
     
     omp_sched_t kind;
     int chunk_size;
     omp_get_schedule(&kind, &chunk_size);
 
+#if VERBOSE
     printf("schedule: ");
     switch(kind)
     {
@@ -180,6 +184,7 @@ int main(void)
             break;
     }
     printf("\nchunks: %d\n", chunk_size);
+#endif
  
     __m256i seeds[threads];
 
@@ -188,6 +193,19 @@ int main(void)
         seeds[i] = _mm256_set_epi32(
                 rand(), rand(), rand(), rand(),
                 rand(), rand(), rand(), rand());
+    }
+    
+    int _res = PHOTONS / threads;
+    int _rem = PHOTONS % threads;
+    int _nphotons[threads];
+    for( unsigned int k = 0; k < threads; k++ ){
+      _nphotons[k] = _res;
+    }
+    for( unsigned int i = 0; i < _rem; i++ ){
+      _nphotons[i] += 1;
+    }
+    for( unsigned int j=0; j < threads; j++ ){
+      printf("%d\n", _nphotons[j]);
     }
 
     #pragma omp parallel
@@ -205,7 +223,7 @@ int main(void)
 
     #pragma omp parallel reduction(+ : heat_ac, heat2_ac)
     {
-        photon(threads);
+        photon(_nphotons);
 
         for (int i = 0; i < SHELLS; i++) {
             heat_ac[i] += heat[i];
