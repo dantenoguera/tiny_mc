@@ -42,16 +42,10 @@ static inline int count_set_bits(int n) {
     return count;
 }
 
-/*
- TODO: 
-    - heats para c/thread
-    - estado s para c/thread
-    - cph atomic?
-*/
 /***
  * Photon
  ***/
-static void photon(int threads)
+static void photon(int * _nphotons)
 {
     const __m256 zero = _mm256_set1_ps(0.0);
     const __m256 zzo = _mm256_set1_ps(0.001);
@@ -198,14 +192,11 @@ int main(void)
     int _res = PHOTONS / threads;
     int _rem = PHOTONS % threads;
     int _nphotons[threads];
-    for( unsigned int k = 0; k < threads; k++ ){
+    for( int k = 0; k < threads; k++ ){
       _nphotons[k] = _res;
     }
-    for( unsigned int i = 0; i < _rem; i++ ){
+    for( int i = 0; i < _rem; i++ ){
       _nphotons[i] += 1;
-    }
-    for( unsigned int j=0; j < threads; j++ ){
-      printf("%d\n", _nphotons[j]);
     }
 
     #pragma omp parallel
