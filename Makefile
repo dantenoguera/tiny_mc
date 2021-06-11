@@ -1,22 +1,19 @@
-# Compilers
-CC = gcc
+CU=nvcc
+CUFLAGS=-O2 -Xcompiler=-Wall -Xcompiler=-Wextra
+LDFLAGS=
 
-# Flags
-CFLAGS = -std=gnu11 -Wall -Wextra -DVERBOSE=0 -O3 -march=native --fast-math
-LDFLAGS = -lm
+TARGETS=tiny_mc
 
-# Binary file
-TARGET = tiny_mc
+all: $(TARGETS)
 
-# Files
-C_SOURCES = tiny_mc.c
-C_OBJS = $(patsubst %.c, %.o, $(C_SOURCES))
+tiny_mc: tiny_mc.o
+	$(CU) $(CUFLAGS) -o $@ $^ $(LDFLAGS)
 
-# Rules
-all: $(TARGET)
+# CU, CUFLAGS no tienen regla implicita como CC/CFLAGS
+%.o: %.cu
+	$(CU) $(CUFLAGS) -o $@ -c $<
 
-$(TARGET): $(C_OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+.PHONY: clean
 
 clean:
-	rm -f $(TARGET) *.o
+	rm -f *.o $(TARGETS)
