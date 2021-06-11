@@ -26,3 +26,10 @@
 #define SEED (time(NULL)) // random seed
 #endif
 
+#ifndef BLOCK_SIZE
+#define BLOCK_SIZE 128 
+#endif
+
+#ifndef WORK
+#define WORK 1 
+#endif
