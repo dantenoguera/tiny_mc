@@ -1,6 +1,7 @@
-#include <cuda.h>
 #include <cstdio>
 #include <cstdint>
+#include <cuda.h>
+#include <curand_kernel.h>
 
 #include "helper_cuda.h"
 #include "wtime.h"
@@ -11,18 +12,24 @@ T div_ceil(T a, T b) {
     return (a + b - 1) / b;
 }
 
-//__device__ uint32_t s[4];
+__global__ void setup_prng(curandState * prng_states) {
+  int id = threadIdx.x + blockIdx.x * blockDim.x; 
 
-__global__ void photon(float * heat) {
-    unsigned int idx = blockDim.x * blockIdx.x + threadIdx.x;
+  /* Copy state to local memory for efficiency */ 
+  curandState localState = prng_states[id]; 
 
-    // seed PRNG
-    // for (int i = 0; i < 4; i++) {
-    //     s[i] = idx + 1;
-    // }
+  /* Each thread gets same seed, a different sequence
+     number, no offset */
+  curand_init(1234, id, 0, &prng_states[id]);
+}
+
+__global__ void photon(float * heat, curandState * prng_states) {
+    unsigned int id = blockDim.x * blockIdx.x + threadIdx.x;
+    curandState prng_state = prng_states[id];
 
     int thread_from = WORK * (blockDim.x * blockIdx.x + threadIdx.x);
-    int thread_to = min(WORK * (blockDim.x * blockIdx.x + threadIdx.x + 1), PHOTONS);
+    int thread_to = min(WORK * (blockDim.x * blockIdx.x + threadIdx.x + 1),
+            PHOTONS);
 
     const float albedo = MU_S / (MU_S + MU_A);
     const float shells_per_mfp = 1e4 / MICRONS_PER_SHELL / (MU_A + MU_S);
@@ -38,11 +45,11 @@ __global__ void photon(float * heat) {
 
     float _heat[SHELLS] = {0}; // local heat
 
-    for (int idx = thread_from; idx < thread_to; ++idx)
+    for (int id = thread_from; id < thread_to; ++id)
     {
         for (;;) {
             /* move */
-            float t = -logf(rand01());
+            float t = -logf(curand_uniform(prng_state));
             x += t * u;
             y += t * v;
             z += t * w;
@@ -58,7 +65,7 @@ __global__ void photon(float * heat) {
 
             /* roulette */
             if (weight < 0.001f) { 
-                if (rand01() > 0.1f)
+                if (curand_uniform(prng_state) > 0.1f)
                     break;
                 weight /= 0.1f;
             }
@@ -66,8 +73,8 @@ __global__ void photon(float * heat) {
             /* New direction, rejection method */
             float xi1, xi2;
             do {
-                xi1 = 2.0f * rand01() - 1.0f;
-                xi2 = 2.0f * rand01() - 1.0f;
+                xi1 = 2.0f * curand_uniform(prng_state) - 1.0f;
+                xi2 = 2.0f * curand_uniform(prng_state) - 1.0f;
                 t = xi1 * xi1 + xi2 * xi2;
             } while (1.0f < t); 
             u = 2.0f * t - 1.0f;
@@ -93,12 +100,21 @@ int main() {
     checkCudaCall(cudaEventCreate(&gpu_finish));
 
     // kernel parameters
-    dim3 block(BLOCK_SIZE);
-    dim3 grid(div_ceil(PHOTONS, BLOCK_SIZE * WORK));
+    const unsigned int threads_per_block = BLOCK_SIZE;
+    const unsigned int block_count = div_ceil(PHOTONS, BLOCK_SIZE * WORK);
+    const unsigned int total_threads = threads_per_block * block_count;
+
+    // seed/PRNG setup
+    curandState *prng_states;
+    checkCudaCall((cudaMalloc((void **)&devStates,
+                    totalThreads * sizeof(curandState))); 
+
+    setup_prng<<<block_count, threads_per_block>>>(prng_states);
+    checkCudaCall(cudaGetLastError());
 
     // launch kernel
     checkCudaCall(cudaEventRecord(gpu_start));
-    photon<<<grid, block>>>(heat);
+    photon<<<block_count, threads_per_block>>>(heat, prng_states);
     checkCudaCall(cudaGetLastError());
     checkCudaCall(cudaEventRecord(gpu_finish));
     checkCudaCall(cudaDeviceSynchronize());
@@ -130,20 +146,16 @@ int main() {
     for (unsigned int i = 0; i < SHELLS - 1; ++i) {
         printf("%6.0f\t%12.5f\t%12.5f\n", i * (float)MICRONS_PER_SHELL,
                heat[i] / t / (i * i + i + 1.0 / 3.0),
-               sqrt(heat2[i] - heat[i] * heat[i] / PHOTONS) / t / (i * i + i + 1.0f / 3.0f));
+               sqrt(heat2[i] - heat[i] * heat[i] / PHOTONS) / t /
+               (i * i + i + 1.0f / 3.0f));
     }
     printf("# extra\t%12.5f\n", heat[SHELLS - 1] / PHOTONS);
-    printf("block size: %d\n", BLOCK_SIZE);
-    printf("grid size: %d\n", div_ceil(PHOTONS, BLOCK_SIZE * WORK));
-    printf("total threads: %d\n\n", BLOCK_SIZE * div_ceil(PHOTONS, BLOCK_SIZE * WORK);
-    printf("%photons: lf\n", PHOTONS);
-    printf("%ph/s: lf\n", 1e-3 * PHOTONS / gpu_elapsed);
-    printf("gpu: %f ms\n", gpu_elapsed);
-    // printf("total: %f ms\n", elapsed);
-#else
-    printf("block size: %d\n", BLOCK_SIZE);
-    printf("grid size: %d\n", div_ceil(PHOTONS, BLOCK_SIZE * WORK));
-    printf("total threads: %d\n\n", BLOCK_SIZE * div_ceil(PHOTONS, BLOCK_SIZE * WORK);
+#else // copiar lo que está abajo arriba cuando no haya mas cosas que agregar
+    printf("block size: %u\n", BLOCK_SIZE);
+    printf("grid size: %u\n", div_ceil(PHOTONS, BLOCK_SIZE * WORK));
+    printf("total threads: %u\n", BLOCK_SIZE * 
+            div_ceil(PHOTONS, BLOCK_SIZE * WORK);
+    printf("device allocated : % lu\n", sizeof(curandState) * total_threads);
     printf("%photons: lf\n", PHOTONS);
     printf("%ph/s: lf\n", 1e-3 * PHOTONS / gpu_elapsed);
     printf("gpu: %f ms\n", gpu_elapsed);
@@ -152,6 +164,7 @@ int main() {
 
     // cleanup
     checkCudaCall(cudaFree(heat));
+    checkCudaCall(cudaFree(prng_states));
 
     return 0;
 }
