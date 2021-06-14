@@ -22,14 +22,13 @@
 #define MICRONS_PER_SHELL 50 // Thickness of spherical shells in microns
 #endif
 
-#ifndef SEED
-#define SEED (time(NULL)) // random seed
-#endif
+#define VERBOSE 0
 
+// cuda params
 #ifndef BLOCK_SIZE
-#define BLOCK_SIZE 128 
+#define BLOCK_SIZE 128
 #endif
 
 #ifndef WORK
-#define WORK 1 
+#define WORK 1
 #endif
