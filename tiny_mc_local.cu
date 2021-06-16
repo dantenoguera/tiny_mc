@@ -20,7 +20,6 @@ __global__ void setup_prng(curandState * prng_states) {
 __global__ void photon(float * heat, curandState * prng_states) {
     unsigned int id = blockDim.x * blockIdx.x + threadIdx.x;
 
-    curand_init(1234, id, 0, &prng_states[id]);
     curandState prng_state = prng_states[id];
 
     int thread_from = WORK * (blockDim.x * blockIdx.x + threadIdx.x);
