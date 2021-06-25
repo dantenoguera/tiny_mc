@@ -17,7 +17,7 @@ __global__ void setup_prng(curandState * prng_states) {
     curand_init(1234, id, 0, &prng_states[id]);
 }
 
-__global__ void photon(float * heat, curandState * prng_states) {
+__global__ void photon(float * heat, float * heat2, curandState * prng_states) {
     unsigned int id = blockDim.x * blockIdx.x + threadIdx.x;
 
     curandState prng_state = prng_states[id];
@@ -30,6 +30,7 @@ __global__ void photon(float * heat, curandState * prng_states) {
     const float shells_per_mfp = 1e4 / MICRONS_PER_SHELL / (MU_A + MU_S);
 
     float _heat[SHELLS] = {0};
+    float _heat2[SHELLS] = {0};
 
     for (int i = thread_from; i < thread_to; ++i) {
         /* launch */
@@ -55,6 +56,7 @@ __global__ void photon(float * heat, curandState * prng_states) {
             }
 
             _heat[shell] += (1.0f - albedo) * weight;
+            _heat2[shell] += (1.0f - albedo) * (1.0f - albedo)  * weight * weight;
             weight *= albedo;
 
             /* roulette */
@@ -85,10 +87,12 @@ __global__ void photon(float * heat, curandState * prng_states) {
 int main() {
 
     // histogram
-    float * heat;
+    float *heat, *heat2;
     checkCudaCall(cudaMallocManaged(&heat, SHELLS * sizeof(float)));
+    checkCudaCall(cudaMallocManaged(&heat2, SHELLS * sizeof(float)));
     for (int i = 0; i < SHELLS; i++) {
         heat[i] = 0;
+        heat2[i] = 0;
     }
 
     // kernel parameters
@@ -113,7 +117,7 @@ int main() {
 
     // launch kernel
     checkCudaCall(cudaEventRecord(gpu_start));
-    photon<<<block_count, BLOCK_SIZE>>>(heat, prng_states);
+    photon<<<block_count, BLOCK_SIZE>>>(heat, heat2, prng_states);
     checkCudaCall(cudaGetLastError());
     checkCudaCall(cudaEventRecord(gpu_finish));
     checkCudaCall(cudaDeviceSynchronize());
@@ -121,12 +125,6 @@ int main() {
     // elapsed gpu time
     float gpu_elapsed;
     checkCudaCall(cudaEventElapsedTime(&gpu_elapsed, gpu_start, gpu_finish));
-
-    // heat2 calc
-    float heat2[SHELLS] = {0};
-    for (int i = 0; i < SHELLS; i++) {
-        heat2[i] = heat[i] * heat[i];
-    }
 
     // elapsed cpu time (total time)
     double cpu_elapsed = wtime() - cpu_start;
@@ -166,6 +164,7 @@ int main() {
     checkCudaCall(cudaEventDestroy(gpu_start));
     checkCudaCall(cudaEventDestroy(gpu_finish));
     checkCudaCall(cudaFree(heat));
+    checkCudaCall(cudaFree(heat2));
     checkCudaCall(cudaFree(prng_states));
 
     return 0;
